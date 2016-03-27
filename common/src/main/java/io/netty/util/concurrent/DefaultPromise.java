@@ -18,7 +18,6 @@ package io.netty.util.concurrent;
 import io.netty.util.Signal;
 import io.netty.util.internal.EmptyArrays;
 import io.netty.util.internal.InternalThreadLocalMap;
-import io.netty.util.internal.OneTimeTask;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.StringUtil;
 import io.netty.util.internal.logging.InternalLogger;
@@ -418,7 +417,7 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
         if (eventExecutor.inEventLoop()) {
             notifyListenerWithStackOverFlowProtection(future, listener);
         } else {
-            safeExecute(eventExecutor, new OneTimeTask() {
+            safeExecute(eventExecutor, new Runnable() {
                 @Override
                 public void run() {
                     notifyListenerWithStackOverFlowProtection(future, listener);
@@ -436,7 +435,7 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
         if (executor.inEventLoop()) {
             notifyListenersWithStackOverFlowProtection();
         } else {
-            safeExecute(executor, new OneTimeTask() {
+            safeExecute(executor, new Runnable() {
                 @Override
                 public void run() {
                     notifyListenersWithStackOverFlowProtection();
@@ -705,7 +704,7 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
             if (listeners instanceof GenericProgressiveFutureListener[]) {
                 final GenericProgressiveFutureListener<?>[] array =
                         (GenericProgressiveFutureListener<?>[]) listeners;
-                safeExecute(executor, new OneTimeTask() {
+                safeExecute(executor, new Runnable() {
                     @Override
                     public void run() {
                         notifyProgressiveListeners0(self, array, progress, total);
@@ -714,7 +713,7 @@ public class DefaultPromise<V> extends AbstractFuture<V> implements Promise<V> {
             } else {
                 final GenericProgressiveFutureListener<ProgressiveFuture<V>> l =
                         (GenericProgressiveFutureListener<ProgressiveFuture<V>>) listeners;
-                safeExecute(executor, new OneTimeTask() {
+                safeExecute(executor, new Runnable() {
                     @Override
                     public void run() {
                         notifyProgressiveListener0(self, l, progress, total);

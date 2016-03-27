@@ -15,14 +15,11 @@
  */
 package io.netty.util.internal;
 
-import io.netty.util.concurrent.EventExecutor;
 
 /**
- * {@link Runnable} which represent a one time task which may allow the {@link EventExecutor} to reduce the amount of
- * produced garbage when queue it for execution.
- *
- * <strong>It is important this will not be reused. After submitted it is not allowed to get submitted again!</strong>
+ * @deprecated Use {@link Runnable}.
  */
+@Deprecated
 public abstract class OneTimeTask extends MpscLinkedQueueNode<Runnable> implements Runnable {
 
     @Override

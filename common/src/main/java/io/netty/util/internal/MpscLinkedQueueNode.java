@@ -18,6 +18,10 @@ package io.netty.util.internal;
 
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
+/**
+ * @deprecated will be removed as not used anymore inside netty.
+ */
+@Deprecated
 public abstract class MpscLinkedQueueNode<T> {
 
     @SuppressWarnings("rawtypes")
