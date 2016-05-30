@@ -31,7 +31,6 @@
  */
 package io.netty.handler.codec.http2.internal.hpack;
 
-import static io.netty.util.CharsetUtil.ISO_8859_1;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
 
 class HeaderField implements Comparable<HeaderField> {
@@ -41,25 +40,21 @@ class HeaderField implements Comparable<HeaderField> {
     // overhead associated with the structure.
     static final int HEADER_ENTRY_OVERHEAD = 32;
 
-    static int sizeOf(byte[] name, byte[] value) {
-        return name.length + value.length + HEADER_ENTRY_OVERHEAD;
+    static int sizeOf(CharSequence name, CharSequence value) {
+        return name.length() + value.length() + HEADER_ENTRY_OVERHEAD;
     }
 
-    final byte[] name;
-    final byte[] value;
+    final CharSequence name;
+    final CharSequence value;
 
     // This constructor can only be used if name and value are ISO-8859-1 encoded.
-    HeaderField(String name, String value) {
-        this(name.getBytes(ISO_8859_1), value.getBytes(ISO_8859_1));
-    }
-
-    HeaderField(byte[] name, byte[] value) {
+    HeaderField(CharSequence name, CharSequence value) {
         this.name = checkNotNull(name, "name");
         this.value = checkNotNull(value, "value");
     }
 
     int size() {
-        return name.length + value.length + HEADER_ENTRY_OVERHEAD;
+        return name.length() + value.length() + HEADER_ENTRY_OVERHEAD;
     }
 
     @Override
@@ -77,15 +72,15 @@ class HeaderField implements Comparable<HeaderField> {
         return ret;
     }
 
-    private int compareTo(byte[] s1, byte[] s2) {
-        int len1 = s1.length;
-        int len2 = s2.length;
+    private static int compareTo(CharSequence s1, CharSequence s2) {
+        int len1 = s1.length();
+        int len2 = s2.length();
         int lim = Math.min(len1, len2);
 
         int k = 0;
         while (k < lim) {
-            byte b1 = s1[k];
-            byte b2 = s2[k];
+            byte b1 = (byte) s1.charAt(k);
+            byte b2 = (byte) s2.charAt(k);
             if (b1 != b2) {
                 return b1 - b2;
             }
@@ -110,8 +105,6 @@ class HeaderField implements Comparable<HeaderField> {
 
     @Override
     public String toString() {
-        String nameString = new String(name);
-        String valueString = new String(value);
-        return nameString + ": " + valueString;
+        return name + ": " + value;
     }
 }

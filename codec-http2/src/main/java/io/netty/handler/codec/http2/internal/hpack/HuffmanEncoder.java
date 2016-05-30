@@ -31,13 +31,30 @@
  */
 package io.netty.handler.codec.http2.internal.hpack;
 
-import java.io.IOException;
-import java.io.OutputStream;
+import io.netty.buffer.ByteBuf;
+import io.netty.util.AsciiString;
+import io.netty.util.ByteProcessor;
+import io.netty.util.concurrent.FastThreadLocal;
+import io.netty.util.internal.ObjectUtil;
+import io.netty.util.internal.PlatformDependent;
 
 final class HuffmanEncoder {
 
     private final int[] codes;
     private final byte[] lengths;
+    private final FastThreadLocal<AsciiStringEncodedLength> encodedLength =
+            new FastThreadLocal<AsciiStringEncodedLength>() {
+        @Override
+        protected AsciiStringEncodedLength initialValue() {
+            return new AsciiStringEncodedLength();
+        }
+    };
+    private final FastThreadLocal<AsciiStringEncoder> encoder = new FastThreadLocal<AsciiStringEncoder>() {
+        @Override
+        protected AsciiStringEncoder initialValue() {
+            return new AsciiStringEncoder();
+        }
+    };
 
     /**
      * Creates a new Huffman encoder with the specified Huffman coding.
@@ -55,57 +72,36 @@ final class HuffmanEncoder {
      *
      * @param out the output stream for the compressed data
      * @param data the string literal to be Huffman encoded
-     * @throws IOException if an I/O error occurs.
-     * @see HuffmanEncoder#encode(OutputStream, byte[], int, int)
      */
-    public void encode(OutputStream out, byte[] data) throws IOException {
-        encode(out, data, 0, data.length);
-    }
+    public void encode(ByteBuf out, CharSequence data) {
+        ObjectUtil.checkNotNull(out, "out");
+        if (data instanceof AsciiString) {
+            encoder.get().encode(out, (AsciiString) data);
+        } else {
+            // slow path
+            long current = 0;
+            int n = 0;
 
-    /**
-     * Compresses the input string literal using the Huffman coding.
-     *
-     * @param out the output stream for the compressed data
-     * @param data the string literal to be Huffman encoded
-     * @param off the start offset in the data
-     * @param len the number of bytes to encode
-     * @throws IOException if an I/O error occurs. In particular, an <code>IOException</code> may be
-     * thrown if the output stream has been closed.
-     */
-    public void encode(OutputStream out, byte[] data, int off, int len) throws IOException {
-        if (out == null) {
-            throw new NullPointerException("out");
-        } else if (data == null) {
-            throw new NullPointerException("data");
-        } else if (off < 0 || len < 0 || (off + len) < 0 || off > data.length ||
-                (off + len) > data.length) {
-            throw new IndexOutOfBoundsException();
-        } else if (len == 0) {
-            return;
-        }
+            for (int i = 0; i < data.length(); i++) {
+                int b = data.charAt(i) & 0xFF;
+                int code = codes[b];
+                int nbits = lengths[b];
 
-        long current = 0;
-        int n = 0;
+                current <<= nbits;
+                current |= code;
+                n += nbits;
 
-        for (int i = 0; i < len; i++) {
-            int b = data[off + i] & 0xFF;
-            int code = codes[b];
-            int nbits = lengths[b];
-
-            current <<= nbits;
-            current |= code;
-            n += nbits;
-
-            while (n >= 8) {
-                n -= 8;
-                out.write((int) (current >> n));
+                while (n >= 8) {
+                    n -= 8;
+                    out.writeByte((int) (current >> n));
+                }
             }
-        }
 
-        if (n > 0) {
-            current <<= 8 - n;
-            current |= 0xFF >>> n; // this should be EOS symbol
-            out.write((int) current);
+            if (n > 0) {
+                current <<= 8 - n;
+                current |= 0xFF >>> n; // this should be EOS symbol
+                out.writeByte((int) current);
+            }
         }
     }
 
@@ -115,14 +111,97 @@ final class HuffmanEncoder {
      * @param data the string literal to be Huffman encoded
      * @return the number of bytes required to Huffman encode <code>data</code>
      */
-    public int getEncodedLength(byte[] data) {
-        if (data == null) {
-            throw new NullPointerException("data");
+    public int getEncodedLength(CharSequence data) {
+        if (data instanceof AsciiString) {
+            return encodedLength.get().length((AsciiString) data);
+        } else {
+            // slow path
+            long len = 0;
+            for (int i = 0; i < data.length(); i++) {
+                len += lengths[data.charAt(i) & 0xFF];
+            }
+            return (int) ((len + 7) >> 3);
         }
-        long len = 0;
-        for (byte b : data) {
-            len += lengths[b & 0xFF];
+    }
+
+    private final class AsciiStringEncoder {
+        private final EncodeProcessor processor = new EncodeProcessor();
+        public void encode(ByteBuf out, AsciiString data) {
+            try {
+                processor.out = out;
+                data.forEachByte(processor);
+                processor.end();
+
+            } catch (Exception e) {
+                PlatformDependent.throwException(e);
+            }
         }
-        return (int) ((len + 7) >> 3);
+
+        private final class EncodeProcessor implements ByteProcessor {
+            ByteBuf out;
+            private long current;
+            private int n;
+
+            @Override
+            public boolean process(byte value) throws Exception {
+                int b = value & 0xFF;
+                int code = codes[b];
+                int nbits = lengths[b];
+
+                current <<= nbits;
+                current |= code;
+                n += nbits;
+
+                while (n >= 8) {
+                    n -= 8;
+                    out.writeByte((int) (current >> n));
+                }
+                return true;
+            }
+
+            public void end() {
+                try {
+                    if (n > 0) {
+                        current <<= 8 - n;
+                        current |= 0xFF >>> n; // this should be EOS symbol
+                        out.writeByte((int) current);
+                    }
+                } finally {
+                    out = null;
+                    current = 0;
+                    n = 0;
+                }
+            }
+        }
+    }
+
+    private final class AsciiStringEncodedLength  {
+        private final EncodedLengthProcessor processor = new EncodedLengthProcessor();
+
+        int length(AsciiString data) {
+            try {
+                data.forEachByte(processor);
+                return processor.length();
+            } catch (Exception e) {
+                PlatformDependent.throwException(e);
+                return -1;
+            } finally {
+                processor.len = 0;
+            }
+        }
+
+        private final class EncodedLengthProcessor implements ByteProcessor {
+            long len;
+
+            @Override
+            public boolean process(byte value) throws Exception {
+                len += lengths[value & 0xFF];
+                return true;
+            }
+
+            int length() {
+                return (int) ((len + 7) >> 3);
+            }
+        }
     }
 }

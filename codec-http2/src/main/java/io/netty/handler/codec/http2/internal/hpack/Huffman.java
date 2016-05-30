@@ -34,18 +34,18 @@ package io.netty.handler.codec.http2.internal.hpack;
 import static io.netty.handler.codec.http2.internal.hpack.HpackUtil.HUFFMAN_CODES;
 import static io.netty.handler.codec.http2.internal.hpack.HpackUtil.HUFFMAN_CODE_LENGTHS;
 
-public final class Huffman {
+final class Huffman {
 
     /**
      * Huffman Decoder
      */
-    public static final HuffmanDecoder DECODER =
+    static final HuffmanDecoder DECODER =
             new HuffmanDecoder(HUFFMAN_CODES, HUFFMAN_CODE_LENGTHS);
 
     /**
      * Huffman Encoder
      */
-    public static final HuffmanEncoder ENCODER =
+    static final HuffmanEncoder ENCODER =
             new HuffmanEncoder(HUFFMAN_CODES, HUFFMAN_CODE_LENGTHS);
 
     private Huffman() {

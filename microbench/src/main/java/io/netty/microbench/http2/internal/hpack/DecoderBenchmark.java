@@ -31,6 +31,8 @@
  */
 package io.netty.microbench.http2.internal.hpack;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http2.internal.hpack.Decoder;
 import io.netty.handler.codec.http2.internal.hpack.Encoder;
 import io.netty.handler.codec.http2.internal.hpack.HeaderListener;
@@ -43,8 +45,6 @@ import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.infra.Blackhole;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.List;
 
@@ -76,24 +76,29 @@ public class DecoderBenchmark extends AbstractMicrobenchmark {
     @BenchmarkMode(Mode.Throughput)
     public void decode(final Blackhole bh) throws IOException {
         Decoder decoder = new Decoder(maxHeaderSize, maxTableSize);
-        decoder.decode(new ByteArrayInputStream(input), new HeaderListener() {
+        decoder.decode(Unpooled.wrappedBuffer(input), new HeaderListener() {
             @Override
-            public void addHeader(byte[] name, byte[] value, boolean sensitive) {
+            public void addHeader(CharSequence name, CharSequence value, boolean sensitive) {
                 bh.consume(sensitive);
             }
         });
         decoder.endHeaderBlock();
     }
 
-    private byte[] getSerializedHeaders(List<Header> headers, boolean sensitive)
-            throws IOException {
+    private byte[] getSerializedHeaders(List<Header> headers, boolean sensitive) {
         Encoder encoder = new Encoder(4096);
 
-        ByteArrayOutputStream outputStream = size.newOutputStream();
-        for (int i = 0; i < headers.size(); ++i) {
-            Header header = headers.get(i);
-            encoder.encodeHeader(outputStream, header.name, header.value, sensitive);
+        ByteBuf out = size.newOutBuffer();
+        try {
+            for (int i = 0; i < headers.size(); ++i) {
+                Header header = headers.get(i);
+                encoder.encodeHeader(out, header.name, header.value, sensitive);
+            }
+            byte[] bytes = new byte[out.readableBytes()];
+            out.readBytes(bytes);
+            return bytes;
+        } finally {
+            out.release();
         }
-        return outputStream.toByteArray();
     }
 }
