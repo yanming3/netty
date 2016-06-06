@@ -17,7 +17,6 @@ package io.netty.handler.codec.http2;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.http2.internal.hpack.Decoder;
-import io.netty.handler.codec.http2.internal.hpack.HeaderListener;
 import io.netty.util.internal.UnstableApi;
 
 import java.io.IOException;
@@ -89,14 +88,7 @@ public class DefaultHttp2HeadersDecoder implements Http2HeadersDecoder, Http2Hea
     public Http2Headers decodeHeaders(ByteBuf headerBlock) throws Http2Exception {
         try {
             final Http2Headers headers = new DefaultHttp2Headers(validateHeaders, (int) headerArraySizeAccumulator);
-            HeaderListener listener = new HeaderListener() {
-                @Override
-                public void addHeader(CharSequence key, CharSequence value, boolean sensitive) {
-                    headers.add(key, value);
-                }
-            };
-
-            decoder.decode(headerBlock, listener);
+            decoder.decode(headerBlock, headers);
             if (decoder.endHeaderBlock()) {
                 maxHeaderSizeExceeded();
             }

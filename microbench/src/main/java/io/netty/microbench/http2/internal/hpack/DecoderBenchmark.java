@@ -33,9 +33,11 @@ package io.netty.microbench.http2.internal.hpack;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.CharSequenceValueConverter;
+import io.netty.handler.codec.DefaultHeaders;
+import io.netty.handler.codec.Headers;
 import io.netty.handler.codec.http2.internal.hpack.Decoder;
 import io.netty.handler.codec.http2.internal.hpack.Encoder;
-import io.netty.handler.codec.http2.internal.hpack.HeaderListener;
 import io.netty.microbench.util.AbstractMicrobenchmark;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -76,12 +78,17 @@ public class DecoderBenchmark extends AbstractMicrobenchmark {
     @BenchmarkMode(Mode.Throughput)
     public void decode(final Blackhole bh) throws IOException {
         Decoder decoder = new Decoder(maxHeaderSize, maxTableSize);
-        decoder.decode(Unpooled.wrappedBuffer(input), new HeaderListener() {
+        @SuppressWarnings("unchecked")
+        Headers<CharSequence, CharSequence, ? extends Headers> headers =
+                new DefaultHeaders<CharSequence, CharSequence, Headers>
+                (CharSequenceValueConverter.INSTANCE) {
             @Override
-            public void addHeader(CharSequence name, CharSequence value, boolean sensitive) {
+            public Headers add(CharSequence name, CharSequence value) {
                 bh.consume(sensitive);
+                return this;
             }
-        });
+        };
+        decoder.decode(Unpooled.wrappedBuffer(input), headers);
         decoder.endHeaderBlock();
     }
 

@@ -31,18 +31,23 @@
  */
 package io.netty.handler.codec.http2.internal.hpack;
 
+import io.netty.handler.codec.CharSequenceValueConverter;
+import io.netty.handler.codec.DefaultHeaders;
+
 import java.util.List;
 
-final class TestHeaderListener implements HeaderListener {
+final class TestHeaderListener extends DefaultHeaders<CharSequence, CharSequence, TestHeaderListener> {
 
     private final List<HeaderField> headers;
 
     TestHeaderListener(List<HeaderField> headers) {
+        super(CharSequenceValueConverter.INSTANCE);
         this.headers = headers;
     }
 
     @Override
-    public void addHeader(CharSequence name, CharSequence value, boolean sensitive) {
+    public TestHeaderListener add(CharSequence name, CharSequence value) {
         headers.add(new HeaderField(name, value));
+        return this;
     }
 }

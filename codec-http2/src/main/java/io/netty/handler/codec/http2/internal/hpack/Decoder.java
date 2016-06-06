@@ -32,6 +32,7 @@
 package io.netty.handler.codec.http2.internal.hpack;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.handler.codec.Headers;
 import io.netty.handler.codec.http2.internal.hpack.HpackUtil.IndexType;
 import io.netty.util.AsciiString;
 import io.netty.util.internal.EmptyArrays;
@@ -109,7 +110,7 @@ public final class Decoder {
     /**
      * Decode the header block into header fields.
      */
-    public void decode(ByteBuf in, HeaderListener headerListener) throws IOException {
+    public void decode(ByteBuf in, Headers<CharSequence, CharSequence, ?> headers) throws IOException {
         while (in.isReadable()) {
             switch (state) {
                 case READ_HEADER_REPRESENTATION:
@@ -126,7 +127,7 @@ public final class Decoder {
                         } else if (index == 0x7F) {
                             state = State.READ_INDEXED_HEADER;
                         } else {
-                            indexHeader(index, headerListener);
+                            indexHeader(index, headers);
                         }
                     } else if ((b & 0x40) == 0x40) {
                         // Literal Header Field with Incremental Indexing
@@ -192,7 +193,7 @@ public final class Decoder {
                         throw DECOMPRESSION_EXCEPTION;
                     }
 
-                    indexHeader(index + headerIndex, headerListener);
+                    indexHeader(index + headerIndex, headers);
                     state = State.READ_HEADER_REPRESENTATION;
                     break;
 
@@ -331,7 +332,7 @@ public final class Decoder {
                         }
 
                         if (valueLength == 0) {
-                            insertHeader(headerListener, name, AsciiString.EMPTY_STRING, indexType);
+                            insertHeader(headers, name, AsciiString.EMPTY_STRING, indexType);
                             state = State.READ_HEADER_REPRESENTATION;
                         } else {
                             state = State.READ_LITERAL_HEADER_VALUE;
@@ -382,7 +383,7 @@ public final class Decoder {
                     }
 
                     CharSequence value = readStringLiteral(in, valueLength);
-                    insertHeader(headerListener, name, value, indexType);
+                    insertHeader(headers, name, value, indexType);
                     state = State.READ_HEADER_REPRESENTATION;
                     break;
 
@@ -475,21 +476,21 @@ public final class Decoder {
         }
     }
 
-    private void indexHeader(int index, HeaderListener headerListener) throws IOException {
+    private void indexHeader(int index, Headers<CharSequence, CharSequence, ?> headers) throws IOException {
         if (index <= StaticTable.length) {
             HeaderField headerField = StaticTable.getEntry(index);
-            addHeader(headerListener, headerField.name, headerField.value, false);
+            addHeader(headers, headerField.name, headerField.value, false);
         } else if (index - StaticTable.length <= dynamicTable.length()) {
             HeaderField headerField = dynamicTable.getEntry(index - StaticTable.length);
-            addHeader(headerListener, headerField.name, headerField.value, false);
+            addHeader(headers, headerField.name, headerField.value, false);
         } else {
             throw ILLEGAL_INDEX_VALUE;
         }
     }
 
-    private void insertHeader(HeaderListener headerListener, CharSequence name, CharSequence value,
+    private void insertHeader(Headers<CharSequence, CharSequence, ?> headers, CharSequence name, CharSequence value,
                               IndexType indexType) {
-        addHeader(headerListener, name, value, indexType == IndexType.NEVER);
+        addHeader(headers, name, value, indexType == IndexType.NEVER);
 
         switch (indexType) {
             case NONE:
@@ -505,11 +506,11 @@ public final class Decoder {
         }
     }
 
-    private void addHeader(HeaderListener headerListener, CharSequence name, CharSequence value,
+    private void addHeader(Headers<CharSequence, CharSequence, ?> headers, CharSequence name, CharSequence value,
                            boolean sensitive) {
         long newSize = headerSize + name.length() + value.length();
         if (newSize <= maxHeaderSize) {
-            headerListener.addHeader(name, value, sensitive);
+            headers.add(name, value);
             headerSize = (int) newSize;
         } else {
             // truncation will be reported during endHeaderBlock
