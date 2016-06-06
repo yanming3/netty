@@ -34,27 +34,23 @@ package io.netty.handler.codec.http2.internal.hpack;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.AsciiString;
 import io.netty.util.ByteProcessor;
-import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.internal.ObjectUtil;
 import io.netty.util.internal.PlatformDependent;
+
+
+import static io.netty.handler.codec.http2.internal.hpack.HpackUtil.HUFFMAN_CODES;
+import static io.netty.handler.codec.http2.internal.hpack.HpackUtil.HUFFMAN_CODE_LENGTHS;
 
 final class HuffmanEncoder {
 
     private final int[] codes;
     private final byte[] lengths;
-    private final FastThreadLocal<AsciiStringEncodedLength> encodedLength =
-            new FastThreadLocal<AsciiStringEncodedLength>() {
-        @Override
-        protected AsciiStringEncodedLength initialValue() {
-            return new AsciiStringEncodedLength();
-        }
-    };
-    private final FastThreadLocal<AsciiStringEncoder> encoder = new FastThreadLocal<AsciiStringEncoder>() {
-        @Override
-        protected AsciiStringEncoder initialValue() {
-            return new AsciiStringEncoder();
-        }
-    };
+    private final EncodedLengthProcessor encodedLengthProcessor = new EncodedLengthProcessor();
+    private final EncodeProcessor encodeProcessor = new EncodeProcessor();
+
+    HuffmanEncoder() {
+        this(HUFFMAN_CODES, HUFFMAN_CODE_LENGTHS);
+    }
 
     /**
      * Creates a new Huffman encoder with the specified Huffman coding.
@@ -62,7 +58,7 @@ final class HuffmanEncoder {
      * @param codes the Huffman codes indexed by symbol
      * @param lengths the length of each Huffman code
      */
-    HuffmanEncoder(int[] codes, byte[] lengths) {
+    private HuffmanEncoder(int[] codes, byte[] lengths) {
         this.codes = codes;
         this.lengths = lengths;
     }
@@ -76,7 +72,15 @@ final class HuffmanEncoder {
     public void encode(ByteBuf out, CharSequence data) {
         ObjectUtil.checkNotNull(out, "out");
         if (data instanceof AsciiString) {
-            encoder.get().encode(out, (AsciiString) data);
+            AsciiString string = (AsciiString) data;
+            try {
+                encodeProcessor.out = out;
+                string.forEachByte(encodeProcessor);
+                encodeProcessor.end();
+
+            } catch (Exception e) {
+                PlatformDependent.throwException(e);
+            }
         } else {
             // slow path
             long current = 0;
@@ -113,7 +117,16 @@ final class HuffmanEncoder {
      */
     public int getEncodedLength(CharSequence data) {
         if (data instanceof AsciiString) {
-            return encodedLength.get().length((AsciiString) data);
+            AsciiString string = (AsciiString) data;
+            try {
+                string.forEachByte(encodedLengthProcessor);
+                return encodedLengthProcessor.length();
+            } catch (Exception e) {
+                PlatformDependent.throwException(e);
+                return -1;
+            } finally {
+                encodedLengthProcessor.len = 0;
+            }
         } else {
             // slow path
             long len = 0;
@@ -124,84 +137,54 @@ final class HuffmanEncoder {
         }
     }
 
-    private final class AsciiStringEncoder {
-        private final EncodeProcessor processor = new EncodeProcessor();
-        public void encode(ByteBuf out, AsciiString data) {
-            try {
-                processor.out = out;
-                data.forEachByte(processor);
-                processor.end();
+    private final class EncodeProcessor implements ByteProcessor {
+        ByteBuf out;
+        private long current;
+        private int n;
 
-            } catch (Exception e) {
-                PlatformDependent.throwException(e);
+        @Override
+        public boolean process(byte value) throws Exception {
+            int b = value & 0xFF;
+            int code = codes[b];
+            int nbits = lengths[b];
+
+            current <<= nbits;
+            current |= code;
+            n += nbits;
+
+            while (n >= 8) {
+                n -= 8;
+                out.writeByte((int) (current >> n));
             }
+            return true;
         }
 
-        private final class EncodeProcessor implements ByteProcessor {
-            ByteBuf out;
-            private long current;
-            private int n;
-
-            @Override
-            public boolean process(byte value) throws Exception {
-                int b = value & 0xFF;
-                int code = codes[b];
-                int nbits = lengths[b];
-
-                current <<= nbits;
-                current |= code;
-                n += nbits;
-
-                while (n >= 8) {
-                    n -= 8;
-                    out.writeByte((int) (current >> n));
+        public void end() {
+            try {
+                if (n > 0) {
+                    current <<= 8 - n;
+                    current |= 0xFF >>> n; // this should be EOS symbol
+                    out.writeByte((int) current);
                 }
-                return true;
-            }
-
-            public void end() {
-                try {
-                    if (n > 0) {
-                        current <<= 8 - n;
-                        current |= 0xFF >>> n; // this should be EOS symbol
-                        out.writeByte((int) current);
-                    }
-                } finally {
-                    out = null;
-                    current = 0;
-                    n = 0;
-                }
+            } finally {
+                out = null;
+                current = 0;
+                n = 0;
             }
         }
     }
 
-    private final class AsciiStringEncodedLength  {
-        private final EncodedLengthProcessor processor = new EncodedLengthProcessor();
+    private final class EncodedLengthProcessor implements ByteProcessor {
+        long len;
 
-        int length(AsciiString data) {
-            try {
-                data.forEachByte(processor);
-                return processor.length();
-            } catch (Exception e) {
-                PlatformDependent.throwException(e);
-                return -1;
-            } finally {
-                processor.len = 0;
-            }
+        @Override
+        public boolean process(byte value) throws Exception {
+            len += lengths[value & 0xFF];
+            return true;
         }
 
-        private final class EncodedLengthProcessor implements ByteProcessor {
-            long len;
-
-            @Override
-            public boolean process(byte value) throws Exception {
-                len += lengths[value & 0xFF];
-                return true;
-            }
-
-            int length() {
-                return (int) ((len + 7) >> 3);
-            }
+        int length() {
+            return (int) ((len + 7) >> 3);
         }
     }
 }

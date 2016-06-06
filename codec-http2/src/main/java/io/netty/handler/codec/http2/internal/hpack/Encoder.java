@@ -49,6 +49,7 @@ public final class Encoder {
     private final boolean useIndexing;
     private final boolean forceHuffmanOn;
     private final boolean forceHuffmanOff;
+    private final HuffmanEncoder huffmanEncoder = new HuffmanEncoder();
 
     // a linked hash map of header fields
     private final HeaderEntry[] headerFields = new HeaderEntry[BUCKET_SIZE];
@@ -192,10 +193,10 @@ public final class Encoder {
      * Encode string literal according to Section 5.2.
      */
     private void encodeStringLiteral(ByteBuf out, CharSequence string) {
-        int huffmanLength = Huffman.ENCODER.getEncodedLength(string);
+        int huffmanLength = huffmanEncoder.getEncodedLength(string);
         if ((huffmanLength < string.length() && !forceHuffmanOff) || forceHuffmanOn) {
             encodeInteger(out, 0x80, 7, huffmanLength);
-            Huffman.ENCODER.encode(out, string);
+            huffmanEncoder.encode(out, string);
         } else {
             encodeInteger(out, 0x00, 7, string.length());
             out.writeCharSequence(string, CharsetUtil.ISO_8859_1);

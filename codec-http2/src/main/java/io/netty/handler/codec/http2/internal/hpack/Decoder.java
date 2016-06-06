@@ -57,6 +57,7 @@ public final class Decoder {
     }
 
     private final DynamicTable dynamicTable;
+    private final HuffmanDecoder huffmanDecoder = new HuffmanDecoder();
     private int maxHeaderSize;
     private int maxDynamicTableSize;
     private int encoderMaxDynamicTableSize;
@@ -529,7 +530,7 @@ public final class Decoder {
 
     private CharSequence readStringLiteral(ByteBuf in, int length) throws IOException {
         if (huffmanEncoded) {
-            return new AsciiString(Huffman.DECODER.decode(in, length), false);
+            return new AsciiString(huffmanDecoder.decode(in, length), false);
         } else {
             byte[] buf = new byte[length];
             in.readBytes(buf);

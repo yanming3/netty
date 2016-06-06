@@ -63,56 +63,56 @@ public class HuffmanTest {
         for (int i = 0; i < 4; i++) {
             buf[i] = (byte) 0xFF;
         }
-        decode(Huffman.DECODER, buf);
+        decode(new HuffmanDecoder(), buf);
     }
 
     @Test(expected = IOException.class)
     public void testDecodeIllegalPadding() throws IOException {
         byte[] buf = new byte[1];
         buf[0] = 0x00; // '0', invalid padding
-        decode(Huffman.DECODER, buf);
+        decode(new HuffmanDecoder(), buf);
     }
 
     @Test(expected = IOException.class)
     public void testDecodeExtraPadding() throws IOException {
         byte[] buf = makeBuf(0x0f, 0xFF); // '1', 'EOS'
-        decode(Huffman.DECODER, buf);
+        decode(new HuffmanDecoder(), buf);
     }
 
     @Test(expected = IOException.class)
     public void testDecodeExtraPadding1byte() throws IOException {
         byte[] buf = makeBuf(0xFF);
-        decode(Huffman.DECODER, buf);
+        decode(new HuffmanDecoder(), buf);
     }
 
     @Test(expected = IOException.class)
     public void testDecodeExtraPadding2byte() throws IOException {
         byte[] buf = makeBuf(0x1F, 0xFF); // 'a'
-        decode(Huffman.DECODER, buf);
+        decode(new HuffmanDecoder(), buf);
     }
 
     @Test(expected = IOException.class)
     public void testDecodeExtraPadding3byte() throws IOException {
         byte[] buf = makeBuf(0x1F, 0xFF, 0xFF); // 'a'
-        decode(Huffman.DECODER, buf);
+        decode(new HuffmanDecoder(), buf);
     }
 
     @Test(expected = IOException.class)
     public void testDecodeExtraPadding4byte() throws IOException {
         byte[] buf = makeBuf(0x1F, 0xFF, 0xFF, 0xFF); // 'a'
-        decode(Huffman.DECODER, buf);
+        decode(new HuffmanDecoder(), buf);
     }
 
     @Test(expected = IOException.class)
     public void testDecodeExtraPadding29bit() throws IOException {
         byte[] buf = makeBuf(0xFF, 0x9F, 0xFF, 0xFF, 0xFF);  // '|'
-        decode(Huffman.DECODER, buf);
+        decode(new HuffmanDecoder(), buf);
     }
 
     @Test(expected = IOException.class)
     public void testDecodePartialSymbol() throws IOException {
         byte[] buf = makeBuf(0x52, 0xBC, 0x30, 0xFF, 0xFF, 0xFF, 0xFF); // " pFA\x00", 31 bits of padding, a.k.a. EOS
-        decode(Huffman.DECODER, buf);
+        decode(new HuffmanDecoder(), buf);
     }
 
     private static byte[] makeBuf(int ... bytes) {
@@ -124,7 +124,7 @@ public class HuffmanTest {
     }
 
     private static void roundTrip(String s) throws IOException {
-        roundTrip(Huffman.ENCODER, Huffman.DECODER, s);
+        roundTrip(new HuffmanEncoder(), new HuffmanDecoder(), s);
     }
 
     private static void roundTrip(HuffmanEncoder encoder, HuffmanDecoder decoder, String s)
@@ -133,7 +133,7 @@ public class HuffmanTest {
     }
 
     private static void roundTrip(byte[] buf) throws IOException {
-        roundTrip(Huffman.ENCODER, Huffman.DECODER, buf);
+        roundTrip(new HuffmanEncoder(), new HuffmanDecoder(), buf);
     }
 
     private static void roundTrip(HuffmanEncoder encoder, HuffmanDecoder decoder, byte[] buf)
@@ -155,7 +155,7 @@ public class HuffmanTest {
     private static byte[] decode(HuffmanDecoder decoder, byte[] bytes) throws IOException {
         ByteBuf buffer = Unpooled.wrappedBuffer(bytes);
         try {
-            byte[] decoded = Huffman.DECODER.decode(buffer, buffer.readableBytes());
+            byte[] decoded = decoder.decode(buffer, buffer.readableBytes());
             Assert.assertFalse(buffer.isReadable());
             return decoded;
         } finally {
