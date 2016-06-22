@@ -32,15 +32,17 @@ abstract class PoolArena<T> implements PoolArenaMetric {
     static final boolean HAS_UNSAFE = PlatformDependent.hasUnsafe();
 
     enum SizeClass {
-        Tiny,
-        Small,
-        Normal
+        Tiny,//[16,512)
+        Small,//[512,pageSize)
+        Normal//[pageSize,chunkSize)
     }
 
+    //tiny范围为[16,512),以16为步长,共32个数
     static final int numTinySubpagePools = 512 >>> 4;
 
     final PooledByteBufAllocator parent;
 
+    // 下面这几个参数用来控制PoolChunk的总内存大小、page大小等
     private final int maxOrder;
     final int pageSize;
     final int pageShifts;
@@ -50,6 +52,7 @@ abstract class PoolArena<T> implements PoolArenaMetric {
     private final PoolSubpage<T>[] tinySubpagePools;
     private final PoolSubpage<T>[] smallSubpagePools;
 
+    // 下面的chunklist组成了一个链表
     private final PoolChunkList<T> q050;
     private final PoolChunkList<T> q025;
     private final PoolChunkList<T> q000;
@@ -92,12 +95,18 @@ abstract class PoolArena<T> implements PoolArenaMetric {
             tinySubpagePools[i] = newSubpagePoolHead(pageSize);
         }
 
-        numSmallSubpagePools = pageShifts - 9;
+        numSmallSubpagePools = pageShifts - 9;//small访问为[512,pageSize),512=2^9
         smallSubpagePools = newSubpagePoolArray(numSmallSubpagePools);
         for (int i = 0; i < smallSubpagePools.length; i ++) {
             smallSubpagePools[i] = newSubpagePoolHead(pageSize);
         }
 
+        /**
+         * 一个chunk的生命周期并不是在一个固定的list中的，随着内存的分配和释放，他也会进入到不同的list中去。
+         * 这样我们就必须得注意，两个相邻的PoolChunkList,前一个list的maxUsage和后一个list的minUsage的值必须得有一段交叉得值来缓冲，
+         * 否则会出现某个usage在临界值的chunk不停的在两个list之间来回移动。比如前一个list是【0,50】则后一个list可以是【25-75】而不能是【50-75】。
+         * 同时也要注意尾节点上的maxUsage一定要等于100，这样chunk占满后才不会被继续往后挪（后面也没有可用list了）
+         */
         q100 = new PoolChunkList<T>(null, 100, Integer.MAX_VALUE, chunkSize);
         q075 = new PoolChunkList<T>(q100, 75, 100, chunkSize);
         q050 = new PoolChunkList<T>(q075, 50, 100, chunkSize);
@@ -109,7 +118,9 @@ abstract class PoolArena<T> implements PoolArenaMetric {
         q075.prevList(q050);
         q050.prevList(q025);
         q025.prevList(q000);
-        q000.prevList(null);
+        q000.prevList(null);// q000没有前置节点，则当一个chunk进入q000后，如果其内存被完全释放，则不再保留在内存中，其分配的内存被完全回收
+        // qInit前置节点为自己，且minUsage=Integer.MIN_VALUE，意味着一个初分配的chunk，在最开始的内存分配过程中(内存使用率<25%)，
+        // 即使完全回收也不会被释放，这样始终保留在内存中，后面的分配就无需新建chunk,减小了分配的时间
         qInit.prevList(qInit);
 
         List<PoolChunkListMetric> metrics = new ArrayList<PoolChunkListMetric>(6);
@@ -146,7 +157,7 @@ abstract class PoolArena<T> implements PoolArenaMetric {
         return normCapacity >>> 4;
     }
 
-    static int smallIdx(int normCapacity) {
+    static int smallIdx(int normCapacity) {//[0]=512,[1]=1024
         int tableIdx = 0;
         int i = normCapacity >>> 10;
         while (i != 0) {
@@ -177,14 +188,15 @@ abstract class PoolArena<T> implements PoolArenaMetric {
                     // was able to allocate out of the cache so move on
                     return;
                 }
-                tableIdx = tinyIdx(normCapacity);
+                // 小内存从tinySubpagePools中分配
+                tableIdx = tinyIdx(normCapacity);//根据16的步长,计算索引
                 table = tinySubpagePools;
             } else {
                 if (cache.allocateSmall(this, buf, reqCapacity, normCapacity)) {
                     // was able to allocate out of the cache so move on
                     return;
                 }
-                tableIdx = smallIdx(normCapacity);
+                tableIdx = smallIdx(normCapacity);//根据倍乘,计算索引
                 table = smallSubpagePools;
             }
 
@@ -194,7 +206,7 @@ abstract class PoolArena<T> implements PoolArenaMetric {
              * Synchronize on the head. This is needed as {@link PoolChunk#allocateSubpage(int)} and
              * {@link PoolChunk#free(long)} may modify the doubly linked list as well.
              */
-            synchronized (head) {
+            synchronized (head) {// subpage的分配方法不是线程安全，所以需要在实际分配时加锁
                 final PoolSubpage<T> s = head.next;
                 if (s != head) {
                     assert s.doNotDestroy && s.elemSize == normCapacity;
@@ -225,6 +237,24 @@ abstract class PoolArena<T> implements PoolArenaMetric {
         }
     }
 
+    /**
+     *
+     * 这里为什么不是从较低的q000开始呢?在分析PoolChunkList的时候，我们知道一个chunk随着内存的不停释放，
+     * 它本身会不停的往其所在的chunk list的prev list移动，直到其完全释放后被回收。 如果这里是从q000开始尝试分配，
+     * 虽然分配的速度可能更快了（因为分配成功的几率更大），但一个chunk在使用率为25%以内时有更大几率再分配，
+     * 也就是一个chunk被回收的几率大大降低了。这样就带来了一个问题，我们的应用在实际运行过程中会存在一个访问高峰期，
+     * 这个时候内存的占用量会是平时的几倍，因此会多分配几倍的chunk出来，而等高峰期过去以后，由于chunk被回收的几率降低，
+     * 内存回收的进度就会很慢（因为没被完全释放，所以无法回收），内存就存在很大的浪费。
+     * 为什么是从q050开始尝试分配呢，q050是内存占用50%~100%的chunk，猜测是希望能够提高整个应用的内存使用率，因为这样大部分情况下会使用q050的内存，
+     * 这样在内存使用不是很多的情况下一些利用率低(<50%)的chunk慢慢就会淘汰出去，最终被回收。
+     * 然而为什么不是从qinit中开始呢，这里的chunk利用率低，但又不会被回收，岂不是浪费？
+     * q075由于使用率高，分配成功的几率也会更小，因此放到最后
+     * 如果整个list中都无法分配，则新建一个chunk，并将其加入到qinit中。
+     * 需要注意的是，上面这个方法已经是被synchronized修饰的了，因为chunk本身的访问不是线程安全的，因此我们在实际分配内存的时候必须保证线程安全，防止同一个内存块被多个对象申请到。
+     * @param buf
+     * @param reqCapacity
+     * @param normCapacity
+     */
     private synchronized void allocateNormal(PooledByteBuf<T> buf, int reqCapacity, int normCapacity) {
         if (q050.allocate(buf, reqCapacity, normCapacity) || q025.allocate(buf, reqCapacity, normCapacity) ||
             q000.allocate(buf, reqCapacity, normCapacity) || qInit.allocate(buf, reqCapacity, normCapacity) ||
@@ -250,12 +280,12 @@ abstract class PoolArena<T> implements PoolArenaMetric {
     }
 
     void free(PoolChunk<T> chunk, long handle, int normCapacity, PoolThreadCache cache) {
-        if (chunk.unpooled) {
+        if (chunk.unpooled) {//如果chunk不是pool的（如上面的huge方式分配的)，则直接销毁（回收）；
             int size = chunk.chunkSize();
             destroyChunk(chunk);
             activeBytesHuge.add(-size);
             deallocationsHuge.increment();
-        } else {
+        } else {//优先放到本线程的缓存中,如果无法放到缓存,则直接释放
             SizeClass sizeClass = sizeClass(normCapacity);
             if (cache != null && cache.add(this, chunk, handle, normCapacity, sizeClass)) {
                 // cached so not free it.
@@ -323,7 +353,7 @@ abstract class PoolArena<T> implements PoolArenaMetric {
         if (reqCapacity >= chunkSize) {
             return reqCapacity;
         }
-
+        //当申请的内存大于512时,size成倍增长，即512->1024->2048->4096->8192->...
         if (!isTiny(reqCapacity)) { // >= 512
             // Doubled
 
@@ -342,13 +372,13 @@ abstract class PoolArena<T> implements PoolArenaMetric {
 
             return normalizedCapacity;
         }
-
+        //当申请的内存小于512,从16开始，每次加16字节
         // Quantum-spaced
-        if ((reqCapacity & 15) == 0) {
+        if ((reqCapacity & 15) == 0) {//如果是16的倍数,则直接返回
             return reqCapacity;
         }
 
-        return (reqCapacity & ~15) + 16;
+        return (reqCapacity & ~15) + 16;//如果不是16的倍数,则将余数舍弃,返回最接近的16的倍数
     }
 
     void reallocate(PooledByteBuf<T> buf, int newCapacity, boolean freeOldMemory) {
@@ -357,7 +387,7 @@ abstract class PoolArena<T> implements PoolArenaMetric {
         }
 
         int oldCapacity = buf.length;
-        if (oldCapacity == newCapacity) {
+        if (oldCapacity == newCapacity) {// 新老内存相同，不用重新分配
             return;
         }
 
@@ -369,27 +399,28 @@ abstract class PoolArena<T> implements PoolArenaMetric {
         int readerIndex = buf.readerIndex();
         int writerIndex = buf.writerIndex();
 
+        // 重新申请一块内存
         allocate(parent.threadCache(), buf, newCapacity);
-        if (newCapacity > oldCapacity) {
+        if (newCapacity > oldCapacity) { // 如果新申请的内存比之前大,直接将之前内存中的数据拷贝到新的内存中
             memoryCopy(
                     oldMemory, oldOffset,
                     buf.memory, buf.offset, oldCapacity);
         } else if (newCapacity < oldCapacity) {
-            if (readerIndex < newCapacity) {
+            if (readerIndex < newCapacity) { // 将可读的数据拷贝过来，不可读的不拷贝
                 if (writerIndex > newCapacity) {
                     writerIndex = newCapacity;
                 }
                 memoryCopy(
                         oldMemory, oldOffset + readerIndex,
                         buf.memory, buf.offset + readerIndex, writerIndex - readerIndex);
-            } else {
+            } else { // 如果之前的readerIndex比新的内存总大小还大，则没有可以读取的数据了，也无法写
                 readerIndex = writerIndex = newCapacity;
             }
         }
 
         buf.setIndex(readerIndex, writerIndex);
 
-        if (freeOldMemory) {
+        if (freeOldMemory) {// 释放之前的内存
             free(oldChunk, oldHandle, oldMaxLength, buf.cache);
         }
     }
